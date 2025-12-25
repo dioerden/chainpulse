@@ -2,7 +2,7 @@
 
 > **Objective:** Evaluate the organic traction and economic sustainability of a GameFi/SocialFi protocol to determine investment viability for a Venture Capital firm.
 
-![Traction Chart](https://github.com/dioerden/web3/assets/placeholder/chart_preview.png)
+![Traction Chart](assets/traction_chart.png)
 *(Note: View `scripts/traction_chart.html` for interactive visualization)*
 
 ## 📂 Project Overview
