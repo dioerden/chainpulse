@@ -1,75 +1,92 @@
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 
-# 1. Generate Synthetic Data
-# Simulation params
-np.random.seed(42)
-days = 180
-start_date = datetime.date.today() - datetime.timedelta(days=days)
-date_range = [start_date + datetime.timedelta(days=x) for x in range(days)]
+# 1. Ingest Raw Data (Simulating Dune Analytics Export)
+try:
+    # In a real scenario, this would be 'dune_export.csv'
+    df = pd.read_csv('data/dune_raw_exports.csv')
+    df['block_time'] = pd.to_datetime(df['block_time'])
+    print(f"✅ Loaded {len(df)} raw transactions.")
+except FileNotFoundError:
+    print("❌ Error: 'data/dune_raw_exports.csv' not found. Run 'generate_raw_data.py' first.")
+    exit()
 
-# Simulate "Organic" Growth (DAU) -> Logarithmic growth + noise
-t = np.linspace(1, 10, days)
-dau_trend = 500 * np.log(t) * 10 
-dau_noise = np.random.normal(0, 200, days)
-dau = np.maximum(dau_trend + dau_noise, 100).astype(int)
+# 2. Sybil Filtering Logic (The "Special Sauce")
+print("🕵️  Applying Sybil Filters...")
 
-# Simulate "Speculative" Token Price -> Correlated initially, then diverts (pump & dump)
-price_trend = np.linspace(0.1, 2.5, days)
-price_shock = np.concatenate([np.zeros(100), np.linspace(0, 3, 40), np.linspace(3, -1, 40)]) # Late spike and crash
-token_price = 0.5 * np.log(t) + price_shock + np.random.normal(0, 0.1, days)
-token_price = np.maximum(token_price, 0.01)
-
-# Create DataFrame
-df = pd.DataFrame({
-    'Date': date_range,
-    'DAU': dau,
-    'Token_Price': token_price
+# Calculate Wallet Metadata
+wallet_stats = df.groupby('from_address').agg({
+    'tx_hash': 'count',
+    'value_usd': 'sum',
+    'block_time': ['min', 'max']
 })
+wallet_stats.columns = ['lifetime_tx_count', 'total_volume_usd', 'first_seen', 'last_seen']
 
-# 2. Visualizing: User Growth vs Token Price
-fig = make_subplots(specs=[[{"secondary_y": True}]])
+# Calculate Wallet Age (Days)
+wallet_stats['wallet_age_days'] = (wallet_stats['last_seen'] - wallet_stats['first_seen']).dt.days
 
-# Add DAU Trace (Bar)
-fig.add_trace(
-    go.Bar(
-        x=df['Date'], y=df['DAU'], 
-        name="Daily Active Users (DAU)",
-        marker_color='rgba(26, 118, 255, 0.6)'
-    ),
-    secondary_y=False
-)
+# Identify "Gameable" Wallets
+# Logic: Must have >5 Txs, >$10 Volume, and active for >1 week
+organic_wallets = wallet_stats[
+    (wallet_stats['lifetime_tx_count'] > 5) & 
+    (wallet_stats['total_volume_usd'] >= 10.0) &
+    (wallet_stats['wallet_age_days'] > 7)
+].index
 
-# Add Price Trace (Line)
-fig.add_trace(
-    go.Scatter(
-        x=df['Date'], y=df['Token_Price'], 
-        name="Token Price ($)",
-        mode='lines',
-        line=dict(color='crimson', width=3)
-    ),
-    secondary_y=True
-)
+print(f"   - Total Unique Wallets: {len(wallet_stats)}")
+print(f"   - Organic Wallets: {len(organic_wallets)}")
+print(f"   - Bot/Sybil Ratio: {(1 - len(organic_wallets)/len(wallet_stats)):.1%}")
 
-# Cosmetic formatting (VC Style)
+# 3. Time-Series Aggregation (DAU)
+df['date'] = df['block_time'].dt.date
+
+# Raw DAU (Reported)
+daily_raw = df.groupby('date')['from_address'].nunique()
+
+# Organic DAU (Filtered)
+df_organic = df[df['from_address'].isin(organic_wallets)]
+daily_organic = df_organic.groupby('date')['from_address'].nunique()
+
+# Merge for plotting
+dau_data = pd.DataFrame({'Reported DAU': daily_raw, 'Organic DAU': daily_organic}).fillna(0)
+
+# 4. Visualization: usage Divergence
+fig = go.Figure()
+
+# Reported DAU (Grey Area)
+fig.add_trace(go.Scatter(
+    x=dau_data.index, y=dau_data['Reported DAU'],
+    name="Reported Users (Raw)",
+    fill='tozeroy',
+    line=dict(color='gray', width=1),
+    fillcolor='rgba(128, 128, 128, 0.2)'
+))
+
+# Organic DAU (Green Line)
+fig.add_trace(go.Scatter(
+    x=dau_data.index, y=dau_data['Organic DAU'],
+    name="Organic Users (Validated)",
+    line=dict(color='#00C853', width=3)
+))
+
+# Cosmetic Formatting
 fig.update_layout(
-    title_text="<b>Project Traction Analysis:</b> User Growth vs. Token Price",
+    title_text="<b>Real Traction Analysis:</b> Organic vs Reported DAU",
     template="plotly_white",
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-fig.update_yaxes(title_text="<b>DAU</b> (Users)", secondary_y=False, showgrid=False)
-fig.update_yaxes(title_text="<b>Token Price</b> ($)", secondary_y=True, showgrid=True)
+fig.update_yaxes(title_text="Daily Active Wallets")
 
-# 3. Save Output
-output_path = "traction_chart.html"
-fig.write_html(output_path)
-print(f"Chart saved to {output_path}")
+# Save Output
+output_path = "assets/traction_chart.png"
+# Write as Image for README (requires kaleido)
+fig.write_image(output_path, scale=2)
+# Also save HTML for interactive view
+fig.write_html("scripts/traction_chart.html")
 
-# Optional: Correlation calc
-corr = df['DAU'].corr(df['Token_Price'])
-print(f"Correlation Coefficient: {corr:.2f}")
+print(f"✅ Chart saved to {output_path}")
+
